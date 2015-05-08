@@ -1,0 +1,37 @@
+[worker]
+h-2.obt.data
+h-3.obt.data
+h-4.obt.data
+
+[master]
+h-1.obt.data
+
+[active_nn]
+h-1.obt.data
+
+[standby_nn]
+h-2.obt.data
+
+[nn]
+h-1.obt.data
+h-2.obt.data
+
+[hmaster]
+h-1.obt.data
+h-2.obt.data
+
+[rs]
+h-3.obt.data
+h-4.obt.data
+
+
+[jn]
+h-1.obt.data
+h-2.obt.data
+h-3.obt.data
+
+[zk]
+h-1.obt.data server_seq=1
+h-2.obt.data server_seq=2
+h-3.obt.data server_seq=3
+

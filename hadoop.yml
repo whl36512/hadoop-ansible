@@ -1,0 +1,302 @@
+---
+# To run playbook:
+# ansible-playbook  -i cluster.txt --tags mytag   hadoop.yml
+
+- hosts: all
+  tasks:
+    - yum: name=java-1.7.0-openjdk-devel state=present
+  tags:
+    - java
+
+- hosts: worker
+  tasks: 
+    - copy: src=/etc/bashrc dest=/etc/.
+  tags:
+    - bashrc
+
+- hosts: master
+  tasks:
+    - file: state=directory path=~/download
+    - get_url: url=http://mirror.symnds.com/software/Apache/zookeeper/zookeeper-3.4.6/zookeeper-3.4.6.tar.gz dest=~/download/.
+    - get_url: url=http://archive.apache.org/dist/hadoop/core/hadoop-2.5.1/hadoop-2.5.1.tar.gz dest=~/download/.
+    - get_url: url=http://http://download.nextag.com/apache/hadoop/common/stable/hadoop-2.6.0.tar.gz dest=~/download/.
+    - get_url: url=http://mirrors.gigenet.com/apache/hbase/hbase-1.0.0/hbase-1.0.0-bin.tar.gz dest=~/download/.
+    - get_url: url=http://mirror.reverse.net/pub/apache/spark/spark-1.3.1/spark-1.3.1-bin-hadoop2.4.tgz dest=~/download/. force=yes
+  tags:
+    - download
+
+- hosts: all
+  tags:
+    - untar
+  tasks: 
+    - file: state=absent path=/usr/lib/hadoop-2.5.1
+    - file: state=absent path=/usr/lib/hadoop-2.6.0
+    - unarchive: src=~/download/zookeeper-3.4.6.tar.gz dest=/usr/lib/. copy=yes
+    - unarchive: src=~/download/hadoop-2.5.1.tar.gz dest=/usr/lib/. copy=yes
+    - unarchive: src=~/download/hadoop-2.6.0.tar.gz dest=/usr/lib/. copy=yes
+    - unarchive: src=~/download/hbase-1.0.0-bin.tar.gz dest=/usr/lib/. copy=yes
+# only need to untar spark on the machine where you need to submit spark jobs
+    - unarchive: src=~/download/spark-1.3.1-bin-hadoop2.4.tgz dest=/usr/lib/. copy=yes
+    - file: state=link src=zookeeper-3.4.6 dest=/usr/lib/zookeeper force=yes
+    - file: state=link src=hadoop-2.5.1 dest=/usr/lib/hadoop force=yes
+    - file: state=link src=hadoop-2.6.0 dest=/usr/lib/hadoop force=yes
+    - file: state=link src=hbase-1.0.0 dest=/usr/lib/hbase force=yes
+    - file: state=link src=spark-1.3.1-bin-hadoop2.4 dest=/usr/lib/spark force=yes
+
+- hosts: master
+  tags:
+    - backup_conf
+  tasks:
+    - shell: mkdir -p /usr/lib/zookeeper/conf/orig
+    - shell: cp /usr/lib/zookeeper/conf/*.* /usr/lib/zookeeper/conf/orig/.
+    - shell: mkdir -p /usr/lib/hadoop/etc/hadoop/orig
+    - shell: cp /usr/lib/hadoop/etc/hadoop/*.* /usr/lib/hadoop/etc/hadoop/orig/.
+    - shell: mkdir -p /usr/lib/hbase/conf//orig
+    - shell: cp /usr/lib/hbase/conf/*.* /usr/lib/hbase/conf/orig/.
+
+- hosts: all
+  tags:
+    - deploy_conf
+  tasks:
+    - copy : src=./conf/hadoop/ dest=/usr/lib/hadoop/etc/hadoop/. force=yes
+    - copy : src=./conf/zookeeper/ dest=/usr/lib/zookeeper/conf/. force=yes
+    - copy : src=./conf/hbase/ dest=/usr/lib/hbase/conf/. force=yes
+
+- hosts: all
+  tags:
+    - local_dir_struct
+  tasks:
+    - group: name=hadoop state=present gid=500
+    - user: name=hdfs uid=501 group=hadoop
+    - user: name=yarn uid=502 group=hadoop
+    - user: name=mapred uid=503 group=hadoop
+    - user: name=hbase uid=504 group=hadoop
+    - user: name=zookeeper uid=506 group=hadoop
+    - file: state=absent path=/mnt/hadoop
+    - file: state=directory path=/mnt/hadoop owner=root group=root
+    - file: state=directory path=/mnt/hadoop/nn owner=hdfs group=hadoop recurse=yes
+    - file: state=directory path=/mnt/hadoop/dn owner=hdfs group=hadoop recurse=yes
+    - file: state=directory path=/mnt/hadoop/jn owner=hdfs group=hadoop recurse=yes
+    - file: state=directory path=/mnt/hadoop/nm owner=yarn group=hadoop recurse=yes
+    - file: state=directory path=/mnt/hadoop/mapred owner=mapred group=hadoop recurse=yes
+    - file: state=directory path=/var/log/hdfs owner=hdfs group=hadoop recurse=yes
+    - file: state=directory path=/var/log/yarn owner=yarn group=hadoop recurse=yes
+    - file: state=directory path=/var/log/mapred owner=mapred group=hadoop recurse=yes
+    - file: state=directory path=/var/log/zookeeper owner=zookeeper group=hadoop recurse=yes
+    - file: state=directory path=/var/log/hbase owner=hbase group=hadoop recurse=yes
+    #- file: state=absent path=/var/run/zookeeper
+    - file: state=directory path=/var/run/zookeeper owner=zookeeper group=hadoop recurse=yes
+    - file: state=directory path=/var/run/hbase owner=hbase group=hadoop recurse=yes
+    - file: state=directory path=/var/run/hadoop owner=hdfs group=hadoop recurse=yes
+    - file: state=directory path=/var/run/mapred owner=mapred group=hadoop recurse=yes
+    - file: state=directory path=/var/run/yarn owner=yarn group=hadoop recurse=yes
+      tags:
+        - now
+
+- hosts: jn
+  tags:
+    - nn_fencing_dir
+  tasks:
+    - file: state=directory path=/home/hdfs/.ssh owner=hdfs group=hadoop recurse=yes
+    - copy: src=/root/.ssh/authorized_keys dest=/home/hdfs/.ssh force=yes
+    - copy: src=/root/.ssh/id_rsa          dest=/home/hdfs/.ssh force=yes
+
+- hosts: zk
+  tags:
+    - create_myid
+  tasks:
+    - name: put sequence number (1,2,3, etc) into myid file
+      shell : echo "{{server_seq}}" > /var/run/zookeeper/myid
+   
+- hosts: zk
+  tags:
+    - restart_zk
+  sudo: yes
+  sudo_user: zookeeper 
+  tasks:
+    - shell: ZOO_LOG_DIR=/var/log/zookeeper /usr/lib/zookeeper/bin/zkServer.sh stop
+      tags:
+      - stop
+      - stop_zk
+    - shell: ZOO_LOG_DIR=/var/log/zookeeper /usr/lib/zookeeper/bin/zkServer.sh start
+      tags:
+      - start
+      - start_zk
+
+- hosts: jn
+  sudo: yes
+  sudo_user: hdfs
+  tasks:
+    - shell: HADOOP_PID_DIR=/var/run/hadoop /usr/lib/hadoop/sbin/hadoop-daemon.sh --script hdfs stop  journalnode
+      tags:
+      - stop
+      - stop_jn
+    - shell: HADOOP_PID_DIR=/var/run/hadoop /usr/lib/hadoop/sbin/hadoop-daemon.sh --script hdfs start journalnode
+      tags:
+      - start
+      - start_jn
+  tags:
+    - restart_jn
+
+- hosts: nn
+  sudo: yes
+  sudo_user: hdfs
+  tasks:
+    - shell: /usr/lib/hadoop/bin/hdfs namenode -format cluster1
+  tags:
+    - format_hdfs
+
+- hosts: standby_nn
+  #sudo: yes
+  #sudo_user: hdfs
+  tasks:
+# after jn are started. after active_nn are started. run only once
+    - shell: /usr/lib/hadoop/bin/hdfs namenode -bootstrapStandby
+      tags:
+        - bootstrapStandby
+
+- hosts: active_nn
+  sudo: yes
+  sudo_user: hdfs
+  tasks:
+# start jn, shut down nn, and do this
+    - shell: /usr/lib/hadoop/bin/hdfs namenode -initializeSharedEdits
+      tags:
+        - initializeSharedEdits
+
+- hosts: active_nn
+  sudo: yes
+  sudo_user: hdfs
+  tasks:
+    - shell: HADOOP_PID_DIR=/var/run/hadoop /usr/lib/hadoop/sbin/hadoop-daemon.sh --script hdfs stop  namenode
+      tags:
+      - stop
+      - stop_nn
+      - stop_active_nn
+    - shell: HADOOP_PID_DIR=/var/run/hadoop /usr/lib/hadoop/sbin/hadoop-daemon.sh --script hdfs start namenode
+      tags:
+      - start
+      - start_nn
+      - start_active_nn
+
+- hosts: standby_nn
+  sudo: yes
+  sudo_user: hdfs
+  tasks:
+    - shell: HADOOP_PID_DIR=/var/run/hadoop /usr/lib/hadoop/sbin/hadoop-daemon.sh --script hdfs stop  namenode
+      tags:
+      - stop
+      - stop_nn
+      - stop_standby_nn
+    - shell: HADOOP_PID_DIR=/var/run/hadoop /usr/lib/hadoop/sbin/hadoop-daemon.sh --script hdfs start namenode
+      tags:
+      - start
+      - start_nn
+      - start_standby_nn
+
+- hosts: worker
+  sudo: yes
+  sudo_user: hdfs
+  tasks:
+    - shell: HADOOP_PID_DIR=/var/run/hadoop /usr/lib/hadoop/sbin/hadoop-daemon.sh --script hdfs stop  datanode
+      tags:
+      - stop
+      - stop_dn
+    - shell: HADOOP_PID_DIR=/var/run/hadoop /usr/lib/hadoop/sbin/hadoop-daemon.sh --script hdfs start datanode
+      tags:
+      - start
+      - start_dn
+  tags:
+    - restart_dn
+
+- hosts: master
+  sudo: yes
+  sudo_user: hdfs
+  tasks:
+    - script: ./create_std_hadoop_dir.sh
+  tags:
+    - std_hdfs_dir
+
+- hosts: master
+  sudo: yes
+  sudo_user: yarn
+  tasks:
+    - shell: YARN_PID_DIR=/var/run/yarn /usr/lib/hadoop/sbin/yarn-daemon.sh stop  resourcemanager
+      tags:
+      - stop
+      - stop_rm
+    - shell: YARN_PID_DIR=/var/run/yarn /usr/lib/hadoop/sbin/yarn-daemon.sh start resourcemanager
+      tags:
+      - start
+      - start_rm
+    - shell: YARN_PID_DIR=/var/run/yarn /usr/lib/hadoop/sbin/yarn-daemon.sh stop  proxyserver
+      tags:
+      - stop
+      - stop_proxyserver
+    - shell: YARN_PID_DIR=/var/run/yarn /usr/lib/hadoop/sbin/yarn-daemon.sh start proxyserver
+      tags:
+      - start
+      - start_proxyserver
+  tags:
+   - restart_rm
+
+
+- hosts: worker
+  sudo: yes
+  sudo_user: yarn
+  tasks:
+    - shell: YARN_PID_DIR=/var/run/yarn /usr/lib/hadoop/sbin/yarn-daemon.sh stop  nodemanager
+      tags:
+      - stop
+      - stop_nm
+    - shell: YARN_PID_DIR=/var/run/yarn /usr/lib/hadoop/sbin/yarn-daemon.sh start nodemanager
+      tags:
+      - start
+      - start_nm
+  tags:
+    - restart_nm
+
+- hosts: master
+  sudo: yes
+  sudo_user: mapred
+  tasks:
+    - shell: HADOOP_MAPRED_PID_DIR=/var/run/mapred /usr/lib/hadoop/sbin/mr-jobhistory-daemon.sh stop  historyserver
+      tags:
+      - stop
+      - stop_hs
+    - shell: HADOOP_MAPRED_PID_DIR=/var/run/mapred /usr/lib/hadoop/sbin/mr-jobhistory-daemon.sh start historyserver
+      tags:
+      - start
+      - start_hs
+  tags:
+    - restart_hs
+
+- hosts: hmaster
+  sudo: yes
+  sudo_user: hbase
+  tasks:
+    - shell: /usr/lib/hbase/bin/hbase-daemon.sh stop  master
+      tags:
+      - stop
+      - stop_hmaster
+    - shell: /usr/lib/hbase/bin/hbase-daemon.sh start master
+      tags:
+      - start
+      - start_hmaster
+  tags:
+    - restart_hmaster
+
+- hosts: rs
+  sudo: yes
+  sudo_user: hbase
+  tasks:
+    - shell: /usr/lib/hbase/bin/hbase-daemon.sh stop  regionserver
+      tags:
+      - stop
+      - stop_rs
+    - shell: /usr/lib/hbase/bin/hbase-daemon.sh start regionserver
+      tags:
+      - start
+      - start_rs
+  tags:
+    - restart_rs

@@ -1,0 +1,9 @@
+HADOOP_CONF_DIR=/usr/lib/hadoop/etc/hadoop /usr/lib/spark/./bin/spark-submit --class org.apache.spark.examples.SparkPi \
+    --master yarn-client \
+    --num-executors 3 \
+    --driver-memory 4g \
+    --executor-memory 1g \
+    --executor-cores 1 \
+    --queue thequeue \
+    /usr/lib/spark/lib/spark-examples*.jar \
+    10
